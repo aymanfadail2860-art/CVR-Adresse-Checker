@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import date
+from decimal import Decimal
 from typing import Any, ClassVar
 
 from cvr_adresse_checker.analyse import (
@@ -218,6 +219,64 @@ class TestUtilstraekkeligeData(unittest.TestCase):
 
     def test_overlap_med_samme_adresse_er_ok(self) -> None:
         r = analyser([adresse("2015-01-01", "2026-09-20"), adresse("2026-09-12", adresse_id="x")])
+        self.assertEqual(r.status, Status.IKKE_MATCH)
+
+
+class TestAarsvaerk(unittest.TestCase):
+    FLYTNING: ClassVar[list[dict[str, Any]]] = [
+        adresse("2015-01-01", "2026-09-11"),
+        adresse("2026-09-12", husnummer=4),
+    ]
+
+    def test_flytning_og_5_aarsvaerk_er_match(self) -> None:
+        r = analyser(self.FLYTNING, aarsvaerk=5)
+        self.assertEqual(r.status, Status.MATCH)
+        self.assertEqual(r.seneste_aarsvaerk, Decimal("5"))
+        self.assertEqual(r.aarsvaerk_periode, "2026-07")
+
+    def test_flytning_og_praecis_15_aarsvaerk_er_match(self) -> None:
+        self.assertEqual(analyser(self.FLYTNING, aarsvaerk=15).status, Status.MATCH)
+        self.assertEqual(analyser(self.FLYTNING, aarsvaerk=15.0).status, Status.MATCH)
+
+    def test_flytning_og_15_01_aarsvaerk_er_ikke_match(self) -> None:
+        r = analyser(self.FLYTNING, aarsvaerk=15.01)
+        self.assertEqual(r.status, Status.IKKE_MATCH)
+        self.assertIn("årsværk overstiger 15", r.note)
+
+    def test_flytning_og_23_aarsvaerk_er_ikke_match(self) -> None:
+        r = analyser(self.FLYTNING, aarsvaerk=23)
+        self.assertEqual(r.status, Status.IKKE_MATCH)
+        self.assertIn("Reel flytning inden for 3 måneder, men årsværk overstiger 15", r.note)
+        self.assertEqual(r.adresseskift_dato, date(2026, 9, 12))
+
+    def test_flytning_uden_aarsvaerksdata_er_utilstraekkelig(self) -> None:
+        r = analyser(self.FLYTNING, uden_aarsvaerk=True)
+        self.assertEqual(r.status, Status.UTILSTRAEKKELIGE_DATA)
+        self.assertIn("kan ikke bekræfte", r.note)
+
+    def test_flytning_med_ikke_numerisk_aarsvaerk_er_utilstraekkelig(self) -> None:
+        for vaerdi in (None, "ukendt", True, -1):
+            with self.subTest(vaerdi=vaerdi):
+                r = analyser(self.FLYTNING, aarsvaerk=vaerdi)
+                self.assertEqual(r.status, Status.UTILSTRAEKKELIGE_DATA)
+
+    def test_seneste_maaned_bruges_ikke_gennemsnit_eller_aeldre_maaned(self) -> None:
+        # Helperen indeholder en ældre måned med 99 årsværk og gamle serier med 1.
+        r = analyser(self.FLYTNING, aarsvaerk=12, aarsvaerk_maaned=(2026, 8))
+        self.assertEqual(r.seneste_aarsvaerk, Decimal("12"))
+        self.assertEqual(r.aarsvaerk_periode, "2026-08")
+
+    def test_lille_virksomhed_uden_nylig_flytning_er_ikke_match(self) -> None:
+        r = analyser([adresse("2015-01-01")], aarsvaerk=3)
+        self.assertEqual(r.status, Status.IKKE_MATCH)
+        self.assertEqual(r.seneste_aarsvaerk, Decimal("3"))
+
+    def test_lille_virksomhed_med_gammel_flytning_er_ikke_match(self) -> None:
+        r = analyser([adresse("2015-01-01", "2026-01-01"), adresse("2026-01-02", husnummer=4)], aarsvaerk=3)
+        self.assertEqual(r.status, Status.IKKE_MATCH)
+
+    def test_manglende_aarsvaerk_uden_flytning_forbliver_ikke_match(self) -> None:
+        r = analyser([adresse("2015-01-01")], uden_aarsvaerk=True)
         self.assertEqual(r.status, Status.IKKE_MATCH)
 
 

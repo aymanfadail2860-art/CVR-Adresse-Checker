@@ -6,6 +6,7 @@ import csv
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 
 from cvr_adresse_checker.analyse import Resultat
@@ -22,6 +23,8 @@ KOLONNER = (
     "dage_siden_adresseskift",
     "virksomhedsstatus",
     "aktiv",
+    "seneste_aarsvaerk",
+    "aarsvaerk_periode",
     "status",
     "note",
     "datakilde",
@@ -103,6 +106,14 @@ def _aktiv_tekst(aktiv: bool | None, har_data: bool) -> str:
     return "JA" if aktiv else "NEJ"
 
 
+def formater_aarsvaerk(vaerdi: Decimal | None) -> str:
+    """Dansk talformat til Excel: heltal uden decimaler, ellers decimalkomma."""
+    if vaerdi is None:
+        return ""
+    tekst = format(vaerdi.normalize(), "f")
+    return tekst.replace(".", ",")
+
+
 def resultat_raekke(r: Resultat) -> dict[str, str]:
     har_data = bool(r.virksomhedsstatus)
     return {
@@ -116,6 +127,8 @@ def resultat_raekke(r: Resultat) -> dict[str, str]:
         ),
         "virksomhedsstatus": r.virksomhedsstatus,
         "aktiv": _aktiv_tekst(r.aktiv, har_data),
+        "seneste_aarsvaerk": formater_aarsvaerk(r.seneste_aarsvaerk),
+        "aarsvaerk_periode": r.aarsvaerk_periode,
         "status": r.status.value,
         "note": r.note,
         "datakilde": r.kilde,

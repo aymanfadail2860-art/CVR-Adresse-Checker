@@ -7,7 +7,8 @@ Fremgangsmåde:
    aldrig som flytning (etage/dør, adresseId, vejnavnstekst, c/o osv.).
 3. Første tidligere post med en anden fysisk adresse er den gamle adresse.
    Flyttedatoen er gyldigFra for det aktuelle segments første post.
-4. MATCH hvis flyttedatoen ligger i [i dag minus 3 kalendermåneder; i dag].
+4. MATCH hvis flyttedatoen ligger i [i dag minus 3 kalendermåneder; i dag]
+   OG seneste månedlige årsværk (erstMaanedsbeskaeftigelse) er <= 15.
 
 Overlap, modstridende eller manglende data, der påvirker afgørelsen, giver
 UTILSTRÆKKELIGE_DATA. Systemet gætter ikke.
@@ -18,6 +19,7 @@ from __future__ import annotations
 import calendar
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any
 
@@ -30,6 +32,7 @@ from cvr_adresse_checker.adresse import (
 )
 
 AKTIVE_STATUSSER = frozenset({"aktiv", "normal"})
+MAX_AARSVAERK = Decimal("15")
 
 
 class Status(str, Enum):
@@ -51,6 +54,8 @@ class Resultat:
     dage_siden_adresseskift: int | None = None
     virksomhedsstatus: str = ""
     aktiv: bool | None = None
+    seneste_aarsvaerk: Decimal | None = None
+    aarsvaerk_periode: str = ""
     kilde: str = field(default="", compare=False)
 
     @property
@@ -130,6 +135,71 @@ def bestem_virksomhedsstatus(virksomhed: dict[str, Any]) -> tuple[str, bool | No
     return sammensat_tekst, sammensat_tekst.casefold() in AKTIVE_STATUSSER
 
 
+def _aarsvaerk_tal(vaerdi: object) -> Decimal | None:
+    if isinstance(vaerdi, bool) or vaerdi is None:
+        return None
+    if isinstance(vaerdi, (int, float, str)):
+        try:
+            tal = Decimal(str(vaerdi).strip().replace(",", "."))
+        except InvalidOperation:
+            return None
+        return tal if tal.is_finite() and tal >= 0 else None
+    return None
+
+
+def seneste_maanedlige_aarsvaerk(virksomhed: dict[str, Any]) -> tuple[Decimal | None, str]:
+    """Seneste månedlige årsværk fra erstMaanedsbeskaeftigelse: (værdi, 'YYYY-MM').
+
+    Den ældre serie ``maanedsbeskaeftigelse`` stoppede i 2019 og bruges ikke.
+    Kvartals-, års- og ansattal bruges heller ikke. Værdien er None, hvis den
+    seneste måned ikke har en gyldig numerisk antalAarsvaerk; der falder ikke
+    tilbage til ældre måneder.
+    """
+    poster: list[tuple[int, int, object]] = []
+    for post in _liste(virksomhed.get("erstMaanedsbeskaeftigelse"), "erstMaanedsbeskaeftigelse"):
+        post = _objekt(post, "erstMaanedsbeskaeftigelse[]")
+        aar, maaned = post.get("aar"), post.get("maaned")
+        if isinstance(aar, int) and isinstance(maaned, int) and 1 <= maaned <= 12:
+            poster.append((aar, maaned, post.get("antalAarsvaerk")))
+    if not poster:
+        metadata = _objekt(virksomhed.get("virksomhedMetadata"), "virksomhedMetadata")
+        nyeste = _objekt(metadata.get("nyesteErstMaanedsbeskaeftigelse"), "nyesteErstMaanedsbeskaeftigelse")
+        aar, maaned = nyeste.get("aar"), nyeste.get("maaned")
+        if not (isinstance(aar, int) and isinstance(maaned, int) and 1 <= maaned <= 12):
+            return None, ""
+        poster.append((aar, maaned, nyeste.get("antalAarsvaerk")))
+    aar, maaned, vaerdi = max(poster, key=lambda p: (p[0], p[1]))
+    return _aarsvaerk_tal(vaerdi), f"{aar:04d}-{maaned:02d}"
+
+
+def _vurder_aarsvaerk(resultat: Resultat) -> Resultat:
+    """Størrelseskrav for MATCH: seneste månedlige årsværk <= 15."""
+    if resultat.status is not Status.MATCH:
+        return resultat
+    if resultat.seneste_aarsvaerk is None:
+        periode = f" (seneste periode {resultat.aarsvaerk_periode})" if resultat.aarsvaerk_periode else ""
+        return replace(
+            resultat,
+            status=Status.UTILSTRAEKKELIGE_DATA,
+            note=_saml(
+                resultat.note,
+                "Reel flytning inden for 3 måneder, men ingen gyldig månedlig årsværksværdi"
+                f"{periode} - kan ikke bekræfte højst 15 årsværk",
+            ),
+        )
+    if resultat.seneste_aarsvaerk > MAX_AARSVAERK:
+        return replace(
+            resultat,
+            status=Status.IKKE_MATCH,
+            note=_saml(
+                resultat.note,
+                "Reel flytning inden for 3 måneder, men årsværk overstiger 15 "
+                f"({resultat.seneste_aarsvaerk} i {resultat.aarsvaerk_periode})",
+            ),
+        )
+    return resultat
+
+
 def _beskriv_teknisk_aendring(aeldre: Adressepost, nyere: Adressepost) -> str:
     if (aeldre.etage, aeldre.sidedoer) != (nyere.etage, nyere.sidedoer):
         return "kun etage/sidedør ændret"
@@ -159,14 +229,17 @@ def _analyser(cvr_nummer: str, raa: object, idag: date) -> Resultat:
         raise UgyldigtFormat("feltet beliggenhedsadresse mangler")
 
     statustekst, aktiv = bestem_virksomhedsstatus(raa)
+    aarsvaerk, aarsvaerk_periode = seneste_maanedlige_aarsvaerk(raa)
     basis = Resultat(
         cvr_nummer=cvr_nummer,
         status=Status.IKKE_MATCH,
         virksomhedsnavn=_virksomhedsnavn(raa),
         virksomhedsstatus=statustekst,
         aktiv=aktiv,
+        seneste_aarsvaerk=aarsvaerk,
+        aarsvaerk_periode=aarsvaerk_periode,
     )
-    resultat = _vurder_adressehistorik(basis, raa, idag)
+    resultat = _vurder_aarsvaerk(_vurder_adressehistorik(basis, raa, idag))
     if resultat.status is Status.MATCH and aktiv is not True:
         resultat = replace(
             resultat,

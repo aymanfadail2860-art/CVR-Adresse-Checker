@@ -1,7 +1,8 @@
 # CVR Adresse Checker
 
-Finder virksomheder, der **reelt** har skiftet fysisk beliggenhedsadresse inden
-for de seneste 3 kalendermåneder. Data kommer fra [cvr.dev](https://cvr.dev).
+Finder **aktive** virksomheder med **højst 15 årsværk**, der **reelt** har
+skiftet fysisk beliggenhedsadresse inden for de seneste 3 kalendermåneder.
+Data kommer fra [cvr.dev](https://cvr.dev).
 Værktøjet er kun Python-standardbibliotek: ingen database, ingen frontend og
 ingen eksterne pakker.
 
@@ -45,7 +46,8 @@ Filerne skrives til `resultater/<dato>/`. Det kan ændres med `-o`.
 
 Kolonner: `cvr_nummer`, `virksomhedsnavn`, `gammel_adresse`, `ny_adresse`,
 `adresseskift_dato`, `dage_siden_adresseskift`, `virksomhedsstatus`, `aktiv`
-(JA/NEJ/UKENDT), `status`, `note` og `datakilde` (api/cache).
+(JA/NEJ/UKENDT), `seneste_aarsvaerk`, `aarsvaerk_periode` (YYYY-MM), `status`,
+`note` og `datakilde` (api/cache). Årsværk skrives med decimalkomma, fx `15,01`.
 
 Filerne bruger `;` som separator og UTF-8 med BOM, så de kan åbnes direkte i
 dansk Excel. Separatoren kan ændres med `--separator ","`.
@@ -54,9 +56,9 @@ dansk Excel. Separatoren kan ændres med `--separator ","`.
 
 | Status | Betydning |
 |---|---|
-| `MATCH` | Reelt adresseskift med `gyldigFra` inden for [i dag − 3 kalendermåneder; i dag] |
-| `IKKE_MATCH` | Intet reelt skift, eller skiftet er ældre end 3 måneder eller ligger i fremtiden |
-| `UTILSTRÆKKELIGE_DATA` | Data kan ikke afgøre det sikkert (overlap, manglende felter, ingen aktuel adresse) |
+| `MATCH` | Reelt adresseskift med `gyldigFra` inden for [i dag − 3 kalendermåneder; i dag] **og** seneste månedlige årsværk ≤ 15 |
+| `IKKE_MATCH` | Intet reelt skift, skiftet er ældre end 3 måneder eller ligger i fremtiden, eller årsværk > 15 |
+| `UTILSTRÆKKELIGE_DATA` | Data kan ikke afgøre det sikkert (overlap, manglende felter, ingen aktuel adresse, eller reel flytning uden gyldigt månedligt årsværk) |
 | `FEJL` | Ugyldigt CVR, ikke fundet, API-fejl, 429/5xx efter retries, ugyldigt response-format |
 
 Ophørte virksomheder kan have status `MATCH`. De er markeret `aktiv=NEJ` med en
@@ -90,6 +92,18 @@ Systemet gætter ikke. Disse tilfælde giver `UTILSTRÆKKELIGE_DATA`:
 - manglende `gyldigFra`
 - manglende nødvendige felter i de poster, der afgør resultatet
 - en post med vejkode, der skal sammenlignes med en post, der kun har vejnavn
+
+### Årsværk (størrelseskrav)
+
+- **Kilde:** `erstMaanedsbeskaeftigelse` i det samme råsvar, så der er intet
+  ekstra API-kald. Værktøjet bruger `antalAarsvaerk` fra den seneste måned
+  (højeste år og måned).
+- **Bruges ikke:** den gamle serie `maanedsbeskaeftigelse` (som stoppede i
+  2019), gennemsnit, kvartals- og årsdata samt antal ansatte.
+- **Grænse:** `antalAarsvaerk <= 15` opfylder kravet. Præcis 15 er tilladt.
+- **Uden tal:** hvis den seneste måned ikke har en gyldig numerisk værdi, eller
+  der ingen månedsdata er, giver en ellers matchende virksomhed
+  `UTILSTRÆKKELIGE_DATA`. Værktøjet falder ikke tilbage til ældre måneder.
 
 ## Cache og API-forbrug
 

@@ -9,13 +9,14 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from cvr_adresse_checker import cli
 from cvr_adresse_checker.analyse import Status
 from cvr_adresse_checker.api import CvrDevKlient, HttpSvar, RaaCache
-from cvr_adresse_checker.filer import laes_input, normaliser_cvr, skriv_csv
+from cvr_adresse_checker.filer import formater_aarsvaerk, laes_input, normaliser_cvr, skriv_csv
 from cvr_adresse_checker.koersel import Indstillinger, analyser_alle
 from tests.hjaelpere import adresse, virksomhed
 from tests.test_api import FalskTransport, ok
@@ -67,6 +68,15 @@ class TestInput(unittest.TestCase):
         self.assertEqual([p.cvr_nummer for p in indhold.poster], ["12345674", "87654321"])
 
 
+class TestAarsvaerkFormat(unittest.TestCase):
+    def test_dansk_talformat(self) -> None:
+        self.assertEqual(formater_aarsvaerk(Decimal("8")), "8")
+        self.assertEqual(formater_aarsvaerk(Decimal("10")), "10")
+        self.assertEqual(formater_aarsvaerk(Decimal("15.0")), "15")
+        self.assertEqual(formater_aarsvaerk(Decimal("15.01")), "15,01")
+        self.assertEqual(formater_aarsvaerk(None), "")
+
+
 class TestKoersel(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -113,6 +123,8 @@ class TestKoersel(unittest.TestCase):
         self.assertIn("udelukket fra matches.csv", alle[OPHOERT_FLYTTET]["note"])
         self.assertEqual(alle[AKTIV_FLYTTET]["adresseskift_dato"], "2026-09-12")
         self.assertEqual(alle[AKTIV_FLYTTET]["dage_siden_adresseskift"], "25")
+        self.assertEqual(alle[AKTIV_FLYTTET]["seneste_aarsvaerk"], "5")
+        self.assertEqual(alle[AKTIV_FLYTTET]["aarsvaerk_periode"], "2026-07")
 
     def test_cache_genbruges_uden_nyt_api_kald(self) -> None:
         self.koer([AKTIV_FLYTTET], FalskTransport([ok(flytning(AKTIV_FLYTTET))]))
