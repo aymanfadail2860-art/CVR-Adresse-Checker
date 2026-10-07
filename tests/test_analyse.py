@@ -69,12 +69,16 @@ class TestReelFlytning(unittest.TestCase):
         r = analyser([adresse("2015-01-01", "2026-08-31"), adresse("2026-09-01", bogstav="B")])
         self.assertEqual(r.status, Status.MATCH)
 
-    def test_andet_postnummer_er_match(self) -> None:
-        r = analyser([adresse("2015-01-01", "2026-08-31"), adresse("2026-09-01", postnummer=2605)])
+    def test_nyt_husnummer_og_nyt_postnummer_er_match(self) -> None:
+        r = analyser(
+            [adresse("2015-01-01", "2026-08-31"), adresse("2026-09-01", husnummer=12, postnummer=2605)]
+        )
         self.assertEqual(r.status, Status.MATCH)
 
-    def test_anden_kommune_er_match(self) -> None:
-        r = analyser([adresse("2015-01-01", "2026-08-31"), adresse("2026-09-01", kommunekode=101)])
+    def test_ny_vej_samme_postnummer_er_match(self) -> None:
+        r = analyser(
+            [adresse("2015-01-01", "2026-08-31"), adresse("2026-09-01", vejnavn="Parkvej", vejkode=None)]
+        )
         self.assertEqual(r.status, Status.MATCH)
 
     def test_andet_land_er_match(self) -> None:
@@ -179,6 +183,96 @@ class TestIngenReelFlytning(unittest.TestCase):
         self.assertEqual(r.adresseskift_dato, date(2021, 1, 1))
 
 
+class TestKodeskiftErIkkeFlytning(unittest.TestCase):
+    """Beslutning 2: postnummer/kommuneKode/vejkode alene er ikke en flytning."""
+
+    def test_kun_postnummer_aendret(self) -> None:
+        r = analyser([adresse("2015-01-01", "2026-09-11"), adresse("2026-09-12", postnummer=2605)])
+        self.assertEqual(r.status, Status.IKKE_MATCH)
+        self.assertIn("kun postnummer ændret", r.note)
+
+    def test_kun_kommunekode_aendret(self) -> None:
+        r = analyser([adresse("2015-01-01", "2026-09-11"), adresse("2026-09-12", kommunekode=101)])
+        self.assertEqual(r.status, Status.IKKE_MATCH)
+
+    def test_kun_vejkode_aendret_samme_vejnavn(self) -> None:
+        r = analyser([adresse("2015-01-01", "2026-09-11"), adresse("2026-09-12", vejkode=9999)])
+        self.assertEqual(r.status, Status.IKKE_MATCH)
+
+    def test_postnummer_kommune_og_vejkode_aendret_samtidig(self) -> None:
+        # Kommunalreform-mønster (som LEGO 2007): ny kommune, vejkode og stavemåde Aa -> Å.
+        r = analyser(
+            [
+                adresse("2015-01-01", "2026-09-11", vejnavn="Aastvej", vejkode=9890, kommunekode=551),
+                adresse("2026-09-12", vejnavn="Åstvej", vejkode=4, kommunekode=530, postnummer=7190),
+            ]
+        )
+        self.assertEqual(r.status, Status.IKKE_MATCH)
+        self.assertIsNone(r.adresseskift_dato)
+
+    def test_punktum_og_mellemrum_i_vejnavn_ignoreres(self) -> None:
+        r = analyser(
+            [
+                adresse("2015-01-01", "2026-09-11", vejnavn="J.C. Jacobsens Gade", vejkode=None),
+                adresse("2026-09-12", vejnavn="J. C. Jacobsens Gade", vejkode=None),
+            ]
+        )
+        self.assertEqual(r.status, Status.IKKE_MATCH)
+
+    def test_gammel_kodeaendring_skjuler_ikke_reel_flytning_bagved(self) -> None:
+        r = analyser(
+            [
+                adresse("2000-01-01", "2006-12-31", husnummer=2),
+                adresse("2007-01-01", "2026-09-11", kommunekode=101, vejkode=7777),
+                adresse("2026-09-12", kommunekode=101, vejkode=7777, postnummer=2605),
+            ]
+        )
+        self.assertEqual(r.status, Status.IKKE_MATCH)
+        self.assertEqual(r.adresseskift_dato, date(2007, 1, 1))
+        self.assertEqual(r.gammel_adresse, "Industrivej 2, 2600 Glostrup")
+
+    def test_vejkode_0_behandles_som_manglende(self) -> None:
+        r = analyser([adresse("2015-01-01", "2026-09-11", vejnavn=None, vejkode=0), adresse("2026-09-12")])
+        self.assertEqual(r.status, Status.UTILSTRAEKKELIGE_DATA)
+
+
+class TestUfuldstaendigAeldreHistorik(unittest.TestCase):
+    """Beslutning 1: usikkerhed før 3-månedersgrænsen giver IKKE_MATCH."""
+
+    def test_novo_moenster_gammel_post_uden_husnummer(self) -> None:
+        r = analyser([adresse("1931-11-28", "2002-10-04", husnummer=None), adresse("2002-10-05")])
+        self.assertEqual(r.status, Status.IKKE_MATCH)
+        self.assertIn("Ufuldstændig ældre adressehistorik", r.note)
+
+    def test_gammelt_overlap_mellem_forskellige_adresser(self) -> None:
+        r = analyser([adresse("2010-01-01", "2016-06-30"), adresse("2016-01-01", husnummer=4)])
+        self.assertEqual(r.status, Status.IKKE_MATCH)
+        self.assertIn("Ufuldstændig ældre adressehistorik", r.note)
+
+    def test_usikkerhed_inden_for_3_maaneder_er_utilstraekkelig(self) -> None:
+        r = analyser([adresse("2015-01-01", "2026-09-11", husnummer=None), adresse("2026-09-12")])
+        self.assertEqual(r.status, Status.UTILSTRAEKKELIGE_DATA)
+
+    def test_gammel_start_men_overlap_ind_i_vinduet_er_utilstraekkelig(self) -> None:
+        r = analyser([adresse("2010-01-01", "2026-08-01"), adresse("2026-01-01", husnummer=4)])
+        self.assertEqual(r.status, Status.UTILSTRAEKKELIGE_DATA)
+
+    def test_aaben_gammel_post_med_anden_adresse_er_utilstraekkelig(self) -> None:
+        r = analyser([adresse("2010-01-01"), adresse("2016-01-01", husnummer=4)])
+        self.assertEqual(r.status, Status.UTILSTRAEKKELIGE_DATA)
+
+    def test_usikkerhed_efter_teknisk_post_i_vinduet(self) -> None:
+        # Aktuelt segment startede før grænsen; en teknisk post i vinduet ændrer ikke det.
+        r = analyser(
+            [
+                adresse("1990-01-01", "2005-12-31", husnummer=None),
+                adresse("2006-01-01", "2026-09-11"),
+                adresse("2026-09-12", adresse_id="x"),
+            ]
+        )
+        self.assertEqual(r.status, Status.IKKE_MATCH)
+
+
 class TestUtilstraekkeligeData(unittest.TestCase):
     def test_ingen_adresser(self) -> None:
         self.assertEqual(analyser([]).status, Status.UTILSTRAEKKELIGE_DATA)
@@ -188,8 +282,8 @@ class TestUtilstraekkeligeData(unittest.TestCase):
         self.assertEqual(r.status, Status.UTILSTRAEKKELIGE_DATA)
         self.assertIn("husnummerFra", r.note)
 
-    def test_aktuel_adresse_mangler_postnummer(self) -> None:
-        r = analyser([adresse("2026-09-12", postnummer=None)])
+    def test_aktuel_adresse_mangler_husnummer(self) -> None:
+        r = analyser([adresse("2026-09-12", husnummer=None)])
         self.assertEqual(r.status, Status.UTILSTRAEKKELIGE_DATA)
 
     def test_ingen_aktuel_adresse(self) -> None:
@@ -203,7 +297,7 @@ class TestUtilstraekkeligeData(unittest.TestCase):
     def test_overlap_mellem_forskellige_adresser(self) -> None:
         r = analyser([adresse("2015-01-01", "2026-09-20"), adresse("2026-09-12", husnummer=4)])
         self.assertEqual(r.status, Status.UTILSTRAEKKELIGE_DATA)
-        self.assertIn("Overlappende", r.note)
+        self.assertIn("overlappende poster", r.note)
 
     def test_to_aktuelle_forskellige_adresser(self) -> None:
         r = analyser([adresse("2015-01-01"), adresse("2026-09-12", husnummer=4)])

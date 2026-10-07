@@ -70,28 +70,40 @@ konkurs, likvidation eller med ukendt status. Kun `sammensatStatus`
 
 Kun `beliggenhedsadresse` bruges. `postadresse` indgår ikke.
 
-1. **Fysisk adressenøgle:** land, kommunekode, vej, husnummerFra, bogstavFra,
-   husnummerTil, bogstavTil og postnummer.
-   - Vejkode bruges frem for vejnavn, når begge poster har vejkode.
-   - Tekst trimmes og sammenlignes uden hensyn til store/små bogstaver.
-   - **Indgår ikke:** etage, sidedør, c/o, postboks, adresseId, sidstOpdateret
-     og DAR-validering.
+1. **Samme fysiske adresse:** samme land, samme vej og samme husnummer
+   (husnummerFra, bogstavFra, husnummerTil og bogstavTil).
+   - **Samme vej:** det normaliserede vejnavn er ens, eller vejkoden er ens i
+     samme kommune (ren omdøbning af vejen). Ved normaliseringen ignoreres
+     store/små bogstaver, punktum, bindestreg og mellemrum, og "Aa" tæller
+     som "Å".
+   - **Ændrer ikke adressen:** postnummer, kommuneKode og vejkode. Et skifte i
+     dem alene (fx kommunalreformen 2007 eller omlagte postnumre) er ikke en
+     flytning.
+   - **Indgår slet ikke:** etage, sidedør, c/o, postboks, adresseId,
+     sidstOpdateret og DAR-validering.
+   - **Reel flytning kræver:** ny vej, nyt husnummer, nyt husbogstav eller et
+     andet land.
 2. **Sortering:** posterne sorteres efter `periode.gyldigFra`.
 3. **Segmenter:** fra den aktuelle post (`gyldigTil = null`) går værktøjet
-   baglæns. Fortløbende poster med samme fysiske nøgle er ét segment, så
+   baglæns. Fortløbende poster med samme fysiske adresse er ét segment, så
    tekniske historikposter og interne flytninger aldrig tæller.
-4. **Flytning:** den første tidligere post med en anden nøgle er den gamle
-   adresse. Flyttedatoen er `gyldigFra` for det aktuelle segments første post.
+4. **Flytning:** den første tidligere post med en anden fysisk adresse er den
+   gamle adresse. Flyttedatoen er `gyldigFra` for det aktuelle segments første
+   post.
 5. **Resultat:** `MATCH` hvis `flyttedato >= i dag − 3 kalendermåneder` og
    flyttedatoen ikke ligger i fremtiden.
 
-Systemet gætter ikke. Disse tilfælde giver `UTILSTRÆKKELIGE_DATA`:
+Systemet gætter ikke. Ved usikker historik afgøres status sådan:
 
-- overlappende poster med forskellige adresser
-- flere aktuelle adresser
-- manglende `gyldigFra`
-- manglende nødvendige felter i de poster, der afgør resultatet
-- en post med vejkode, der skal sammenlignes med en post, der kun har vejnavn
+- **IKKE_MATCH med note om ufuldstændig ældre historik:** usikkerheden ligger
+  med sikkerhed før 3-månedersgrænsen. Det gælder, når både den aktuelle
+  adresse har været uændret siden før grænsen, og den usikre post sluttede
+  før grænsen.
+- **UTILSTRÆKKELIGE_DATA:** usikkerheden berører de seneste 3 måneder.
+  Usikkerheden kan fx være overlappende poster med forskellige adresser,
+  manglende vejnavn eller husnummer, eller en post med vejkode uden vejnavn.
+- **UTILSTRÆKKELIGE_DATA altid:** manglende `gyldigFra`, ingen aktuel adresse
+  og en aktuel adresse uden vejnavn eller husnummer.
 
 ### Årsværk (størrelseskrav)
 

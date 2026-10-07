@@ -201,11 +201,20 @@ def _vurder_aarsvaerk(resultat: Resultat) -> Resultat:
 
 
 def _beskriv_teknisk_aendring(aeldre: Adressepost, nyere: Adressepost) -> str:
-    if (aeldre.etage, aeldre.sidedoer) != (nyere.etage, nyere.sidedoer):
-        return "kun etage/sidedør ændret"
-    if aeldre.vejnavn != nyere.vejnavn:
-        return "kun vejnavnstekst ændret (samme vejkode)"
-    return "teknisk historikpost uden fysisk ændring"
+    felter = [
+        navn
+        for navn, gammel, ny in (
+            ("etage/sidedør", (aeldre.etage, aeldre.sidedoer), (nyere.etage, nyere.sidedoer)),
+            ("vejnavnstekst", aeldre.vejnavn, nyere.vejnavn),
+            ("postnummer", aeldre.postnummer, nyere.postnummer),
+            ("kommunekode", aeldre.kommunekode, nyere.kommunekode),
+            ("vejkode", aeldre.vejkode, nyere.vejkode),
+        )
+        if gammel != ny
+    ]
+    if not felter:
+        return "teknisk historikpost uden fysisk ændring"
+    return f"kun {'/'.join(felter)} ændret (samme vej og husnummer)"
 
 
 def _utilstraekkelig(basis: Resultat, note: str) -> Resultat:
@@ -281,14 +290,28 @@ def _vurder_adressehistorik(basis: Resultat, raa: dict[str, Any], idag: date) ->
     gammel: Adressepost | None = None
     for aeldre in reversed(poster[:-1]):
         samme = samme_fysiske_adresse(aeldre, segment_start)
-        if samme is None:
-            felter = aeldre.manglende_felter() or ["vejkode/vejnavn kan ikke sammenlignes"]
-            return _utilstraekkelig(
-                basis,
-                f"Kan ikke afgøre om adressen er ændret pr. {segment_start.gyldig_fra}: "
-                f"tidligere adressepost mangler {', '.join(felter)}",
-            )
         overlap = aeldre.gyldig_til is None or aeldre.gyldig_til >= _dato(segment_start)
+        if samme is None or (overlap and not samme):
+            if samme is None:
+                felter = aeldre.manglende_felter() or ["vejnavn kan ikke sammenlignes"]
+                aarsag = f"tidligere adressepost mangler {', '.join(felter)}"
+            else:
+                aarsag = f"overlappende poster med forskellige adresser ({aeldre.visning})"
+            # Usikkerheden ligger med sikkerhed før grænsen, når den aktuelle adresse har
+            # været uændret siden før grænsen og den usikre post også sluttede før den.
+            if _dato(segment_start) < cutoff and aeldre.gyldig_til is not None and aeldre.gyldig_til < cutoff:
+                note = (
+                    f"Ufuldstændig ældre adressehistorik før {segment_start.gyldig_fra} ({aarsag}); "
+                    "adressen har været uændret siden før 3-månedersgrænsen"
+                )
+                return replace(
+                    basis,
+                    status=Status.IKKE_MATCH,
+                    note=_saml(note, *(f"Ikke flytning: {x}" for x in reversed(stoej))),
+                )
+            return _utilstraekkelig(
+                basis, f"Kan ikke afgøre om adressen er ændret pr. {segment_start.gyldig_fra}: {aarsag}"
+            )
         if samme:
             if _dato(segment_start) >= cutoff and aeldre != segment_start:
                 stoej.append(
@@ -296,12 +319,6 @@ def _vurder_adressehistorik(basis: Resultat, raa: dict[str, Any], idag: date) ->
                 )
             segment_start = aeldre
             continue
-        if overlap:
-            return _utilstraekkelig(
-                basis,
-                "Overlappende adresseposter med forskellige adresser "
-                f"({aeldre.visning} / {segment_start.visning})",
-            )
         gammel = aeldre
         break
 

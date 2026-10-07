@@ -4,10 +4,11 @@ En adressepost i CVR har bl.a. felterne vejkode, vejnavn, husnummerFra,
 bogstavFra, husnummerTil, bogstavTil, etage, sidedoer, postnummer,
 postdistrikt, landekode, kommune.kommuneKode og periode.gyldigFra/gyldigTil.
 
-Den fysiske placering bestemmes af land, kommune, vej, husnummer og
-postnummer. Etage, sidedør, c/o, postboks, adresseId og tidsstempler indgår
-bevidst ikke, så interne flytninger og tekniske historikposter ikke ligner
-en reel flytning.
+Den fysiske placering bestemmes af land, vej og husnummer (inkl. bogstav og
+husnummerTil). Postnummer, kommunekode og vejkode alene afgør ikke en
+flytning: samme normaliserede vejnavn og husnummer er samme adresse, selv om
+de er ændret (fx ved kommunalreformen 2007 eller omlagte postnumre). Etage,
+sidedør, c/o, postboks, adresseId og tidsstempler indgår slet ikke.
 """
 
 from __future__ import annotations
@@ -26,6 +27,21 @@ def normaliser_tekst(vaerdi: object) -> str:
     if vaerdi is None:
         return ""
     return " ".join(str(vaerdi).split()).casefold()
+
+
+def normaliser_vejnavn(vaerdi: str) -> str:
+    """Sammenligningsnøgle for vejnavn: 'Aa' = 'Å', og punktum/bindestreg/mellemrum ignoreres.
+
+    Fx er 'Aastvej' og 'Åstvej' samme vej, og 'J.C. Jacobsens Gade' = 'J. C. Jacobsens Gade'.
+    """
+    tekst = normaliser_tekst(vaerdi).replace("å", "aa")
+    return "".join(t for t in tekst if t not in ".-' ")
+
+
+def _kode(vaerdi: object) -> str:
+    """Normaliseret kode; 0 betyder 'ukendt' i CVR og behandles som manglende."""
+    tekst = normaliser_tekst(vaerdi)
+    return "" if tekst.strip("0") == "" else tekst
 
 
 def _vis_tekst(vaerdi: object) -> str:
@@ -80,14 +96,10 @@ class Adressepost:
             if not (self.fritekst or self.vejnavn):
                 mangler.append("fritekst/vejnavn")
             return mangler
-        if not self.kommunekode:
-            mangler.append("kommuneKode")
-        if not (self.vejkode or self.vejnavn):
-            mangler.append("vejkode/vejnavn")
+        if not (self.vejnavn or (self.vejkode and self.kommunekode)):
+            mangler.append("vejnavn")
         if not self.husnummer_fra:
             mangler.append("husnummerFra")
-        if not self.postnummer:
-            mangler.append("postnummer")
         return mangler
 
 
@@ -97,7 +109,7 @@ def _kommunekode(post: dict[str, Any]) -> str:
         return ""
     if not isinstance(kommune, dict):
         raise UgyldigtFormat("kommune er ikke et objekt")
-    return normaliser_tekst(kommune.get("kommuneKode"))
+    return _kode(kommune.get("kommuneKode"))
 
 
 def formater_adresse(post: dict[str, Any]) -> str:
@@ -140,7 +152,7 @@ def parse_adressepost(post: object) -> Adressepost:
         sidst_opdateret=_vis_tekst(post.get("sidstOpdateret")),
         landekode=normaliser_tekst(post.get("landekode")),
         kommunekode=_kommunekode(post),
-        vejkode=normaliser_tekst(post.get("vejkode")),
+        vejkode=_kode(post.get("vejkode")),
         vejnavn=normaliser_tekst(post.get("vejnavn")),
         husnummer_fra=normaliser_tekst(post.get("husnummerFra")),
         bogstav_fra=normaliser_tekst(post.get("bogstavFra")),
@@ -157,39 +169,36 @@ def parse_adressepost(post: object) -> Adressepost:
 def samme_fysiske_adresse(a: Adressepost, b: Adressepost) -> bool | None:
     """Afgør om to poster beskriver samme fysiske placering.
 
-    Returnerer None, hvis nødvendige felter mangler, så det ikke kan afgøres.
-    Vejkode bruges frem for vejnavn, når begge poster har vejkode; så tæller
-    en ren omdøbning af vejen ikke som flytning.
+    Samme vej, hvis det normaliserede vejnavn er ens, eller hvis vejkoden er
+    ens i samme kommune (ren omdøbning). Derefter skal husnummer og bogstav
+    (fra/til) være ens. Postnummer, kommunekode og vejkode alene giver aldrig
+    en flytning. Returnerer None, hvis det ikke kan afgøres.
     """
     if a.manglende_felter() or b.manglende_felter():
         return None
     if a.landekode != b.landekode:
         return False
     if a.landekode != "dk":
-        return (a.fritekst, a.vejnavn, a.husnummer_fra, a.postnummer) == (
+        return (a.fritekst, normaliser_vejnavn(a.vejnavn), a.husnummer_fra) == (
             b.fritekst,
-            b.vejnavn,
+            normaliser_vejnavn(b.vejnavn),
             b.husnummer_fra,
-            b.postnummer,
         )
-    if a.kommunekode != b.kommunekode:
-        return False
-    if a.vejkode and b.vejkode:
-        samme_vej = a.vejkode == b.vejkode
+    samme_vejnavn = bool(a.vejnavn and b.vejnavn) and (
+        normaliser_vejnavn(a.vejnavn) == normaliser_vejnavn(b.vejnavn)
+    )
+    samme_vejkode = bool(a.vejkode and a.kommunekode) and (
+        (a.kommunekode, a.vejkode) == (b.kommunekode, b.vejkode)
+    )
+    if samme_vejnavn or samme_vejkode:
+        samme_vej = True
     elif a.vejnavn and b.vejnavn:
-        samme_vej = a.vejnavn == b.vejnavn
+        samme_vej = False
     else:
         return None
-    return samme_vej and (
-        a.husnummer_fra,
-        a.bogstav_fra,
-        a.husnummer_til,
-        a.bogstav_til,
-        a.postnummer,
-    ) == (
+    return samme_vej and (a.husnummer_fra, a.bogstav_fra, a.husnummer_til, a.bogstav_til) == (
         b.husnummer_fra,
         b.bogstav_fra,
         b.husnummer_til,
         b.bogstav_til,
-        b.postnummer,
     )
