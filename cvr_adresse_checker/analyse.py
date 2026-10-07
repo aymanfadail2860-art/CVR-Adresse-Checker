@@ -93,16 +93,27 @@ def _liste(vaerdi: object, navn: str) -> list[Any]:
 
 
 def _virksomhedsnavn(virksomhed: dict[str, Any]) -> str:
+    """Aktuelt navn fra samme råsvar: nyesteNavn, ellers det gældende navn i ``navne``.
+
+    I ``navne`` foretrækkes en åben post (gyldigTil = null) frem for afsluttede,
+    og derefter den nyeste gyldigFra, uanset rækkefølgen i listen.
+    """
     metadata = _objekt(virksomhed.get("virksomhedMetadata"), "virksomhedMetadata")
     nyeste = _objekt(metadata.get("nyesteNavn"), "nyesteNavn")
     navn = nyeste.get("navn")
     if isinstance(navn, str) and navn.strip():
         return navn.strip()
-    for post in reversed(_liste(virksomhed.get("navne"), "navne")):
+    kandidater: list[tuple[bool, date, str]] = []
+    for post in _liste(virksomhed.get("navne"), "navne"):
         post = _objekt(post, "navne[]")
-        if isinstance(post.get("navn"), str):
-            return str(post["navn"]).strip()
-    return ""
+        tekst = post.get("navn")
+        if not (isinstance(tekst, str) and tekst.strip()):
+            continue
+        periode = _objekt(post.get("periode"), "navne.periode")
+        aaben = periode.get("gyldigTil") is None
+        fra = parse_dato(periode.get("gyldigFra"), "navne.gyldigFra") or date.min
+        kandidater.append((aaben, fra, tekst.strip()))
+    return max(kandidater)[2] if kandidater else ""
 
 
 def bestem_virksomhedsstatus(virksomhed: dict[str, Any]) -> tuple[str, bool | None]:

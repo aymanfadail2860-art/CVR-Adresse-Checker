@@ -152,6 +152,64 @@ class TestKoersel(unittest.TestCase):
         self.assertEqual(r[0].status, Status.FEJL)
 
 
+class TestVirksomhedsnavnEksport(unittest.TestCase):
+    """Virksomhedsnavn skal altid med i matches.csv og alle_resultater.csv."""
+
+    def koer_cli(self, data: dict[str, list[dict[str, Any]]]) -> tuple[Path, list[str]]:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        mappe = Path(self._tmp.name)
+        for cvr, svar in data.items():
+            RaaCache(mappe / "cache").gem(cvr, 200, svar, NU)
+        (mappe / "in.txt").write_text("\n".join(data), encoding="utf-8")
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            kode = cli.main(
+                [
+                    str(mappe / "in.txt"),
+                    "--kun-cache",
+                    "--cache-mappe",
+                    str(mappe / "cache"),
+                    "-o",
+                    str(mappe / "ud"),
+                    "--dato",
+                    "2026-10-07",
+                ]
+            )
+        self.assertEqual(kode, 0)
+        with (mappe / "ud" / "matches.csv").open(encoding="utf-8-sig", newline="") as fil:
+            overskrift = next(csv.reader(fil, delimiter=";"))
+        return mappe / "ud", overskrift
+
+    def test_matches_har_kolonnen_selv_uden_matches(self) -> None:
+        _, overskrift = self.koer_cli({UFLYTTET: [virksomhed([adresse("2015-01-01")], cvr=UFLYTTET)]})
+        self.assertEqual(overskrift[:2], ["cvr_nummer", "virksomhedsnavn"])
+
+    def test_hvert_match_har_navnet_fra_cvr_data(self) -> None:
+        ud, _ = self.koer_cli(
+            {
+                AKTIV_FLYTTET: flytning(AKTIV_FLYTTET, navn="Ærø Murer & Søn ApS"),
+                OPHOERT_FLYTTET: flytning(OPHOERT_FLYTTET, navn="Ørsted Byg ApS"),
+            }
+        )
+        matches = laes_csv(ud / "matches.csv")
+        self.assertEqual(
+            [(m["cvr_nummer"], m["virksomhedsnavn"]) for m in matches],
+            [(AKTIV_FLYTTET, "Ærø Murer & Søn ApS"), (OPHOERT_FLYTTET, "Ørsted Byg ApS")],
+        )
+        alle = laes_csv(ud / "alle_resultater.csv")
+        self.assertTrue(all(r["virksomhedsnavn"] for r in alle))
+
+    def test_navn_fra_navne_listen_naar_nyestenavn_mangler(self) -> None:
+        data = flytning(AKTIV_FLYTTET)
+        del data[0]["virksomhedMetadata"]["nyesteNavn"]
+        data[0]["navne"] = [
+            {"navn": "Nyt Navn ApS", "periode": {"gyldigFra": "2020-01-01", "gyldigTil": None}},
+            {"navn": "Gammelt Navn ApS", "periode": {"gyldigFra": "2000-01-01", "gyldigTil": "2019-12-31"}},
+        ]
+        ud, _ = self.koer_cli({AKTIV_FLYTTET: data})
+        self.assertEqual(laes_csv(ud / "matches.csv")[0]["virksomhedsnavn"], "Nyt Navn ApS")
+
+
 class TestCli(unittest.TestCase):
     def test_kun_cache_kørsel_skriver_begge_filer(self) -> None:
         with tempfile.TemporaryDirectory() as mappe_navn:
