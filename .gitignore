@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+.venv/
+
+# Rå API-svar og resultater indeholder virksomhedsdata – committes ikke.
+cache/
+resultater/
+.env
