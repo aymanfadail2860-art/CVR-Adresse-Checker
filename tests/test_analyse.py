@@ -234,6 +234,20 @@ class TestAarsvaerk(unittest.TestCase):
         self.assertEqual(r.seneste_aarsvaerk, Decimal("5"))
         self.assertEqual(r.aarsvaerk_periode, "2026-07")
 
+    def test_praeciserede_eksempler(self) -> None:
+        # Reel flytning + 4 = MATCH, + 15 = MATCH, + 16 = IKKE_MATCH; ingen flytning + 4 = IKKE_MATCH.
+        self.assertEqual(analyser(self.FLYTNING, aarsvaerk=4).status, Status.MATCH)
+        self.assertEqual(analyser(self.FLYTNING, aarsvaerk=15).status, Status.MATCH)
+        self.assertEqual(analyser(self.FLYTNING, aarsvaerk=16).status, Status.IKKE_MATCH)
+        self.assertEqual(analyser([adresse("2015-01-01")], aarsvaerk=4).status, Status.IKKE_MATCH)
+
+    def test_udvikling_i_aarsvaerk_paavirker_ikke_resultatet(self) -> None:
+        # Kraftigt fald (99 -> 4) eller stigning (1 -> 4) betyder intet; kun seneste værdi tæller.
+        for aeldre in (99, 1):
+            data = virksomhed(self.FLYTNING, aarsvaerk=4)
+            data["erstMaanedsbeskaeftigelse"][0]["antalAarsvaerk"] = aeldre
+            self.assertEqual(analyser_virksomhed(CVR, data, IDAG).status, Status.MATCH)
+
     def test_flytning_og_praecis_15_aarsvaerk_er_match(self) -> None:
         self.assertEqual(analyser(self.FLYTNING, aarsvaerk=15).status, Status.MATCH)
         self.assertEqual(analyser(self.FLYTNING, aarsvaerk=15.0).status, Status.MATCH)
