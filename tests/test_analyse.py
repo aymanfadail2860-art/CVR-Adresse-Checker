@@ -199,11 +199,18 @@ class TestKodeskiftErIkkeFlytning(unittest.TestCase):
         r = analyser([adresse("2015-01-01", "2026-09-11"), adresse("2026-09-12", vejkode=9999)])
         self.assertEqual(r.status, Status.IKKE_MATCH)
 
-    def test_postnummer_kommune_og_vejkode_aendret_samtidig(self) -> None:
+    def test_kommune_og_vejkode_aendret_samme_postnummer(self) -> None:
         # Kommunalreform-mønster (som LEGO 2007): ny kommune, vejkode og stavemåde Aa -> Å.
         r = analyser(
             [
-                adresse("2015-01-01", "2026-09-11", vejnavn="Aastvej", vejkode=9890, kommunekode=551),
+                adresse(
+                    "2015-01-01",
+                    "2026-09-11",
+                    vejnavn="Aastvej",
+                    vejkode=9890,
+                    kommunekode=551,
+                    postnummer=7190,
+                ),
                 adresse("2026-09-12", vejnavn="Åstvej", vejkode=4, kommunekode=530, postnummer=7190),
             ]
         )
@@ -234,6 +241,103 @@ class TestKodeskiftErIkkeFlytning(unittest.TestCase):
     def test_vejkode_0_behandles_som_manglende(self) -> None:
         r = analyser([adresse("2015-01-01", "2026-09-11", vejnavn=None, vejkode=0), adresse("2026-09-12")])
         self.assertEqual(r.status, Status.UTILSTRAEKKELIGE_DATA)
+
+
+class TestPostnummerOgKommuneSamtidig(unittest.TestCase):
+    """Samme vej og husnummer, men både nyt postnummer og ny kommune = anden by."""
+
+    def stationsvej(self, gyldig_fra: str, gyldig_til: str | None = None, **kw: Any) -> dict[str, Any]:
+        return adresse(gyldig_fra, gyldig_til, vejnavn="Stationsvej", husnummer=1, **kw)
+
+    def test_1_stationsvej_roskilde_til_aarhus_er_match(self) -> None:
+        r = analyser(
+            [
+                self.stationsvej("2015-01-01", "2026-09-11", postnummer=4000, kommunekode=265, vejkode=100),
+                self.stationsvej("2026-09-12", postnummer=8000, kommunekode=751, vejkode=200),
+            ],
+            aarsvaerk=8,
+        )
+        self.assertEqual(r.status, Status.MATCH)
+        self.assertEqual(r.adresseskift_dato, date(2026, 9, 12))
+
+    def test_1b_stationsvej_men_over_15_aarsvaerk_er_ikke_match(self) -> None:
+        r = analyser(
+            [
+                self.stationsvej("2015-01-01", "2026-09-11", postnummer=4000, kommunekode=265),
+                self.stationsvej("2026-09-12", postnummer=8000, kommunekode=751),
+            ],
+            aarsvaerk=16,
+        )
+        self.assertEqual(r.status, Status.IKKE_MATCH)
+
+    def test_1c_stationsvej_for_laengere_end_3_maaneder_siden_er_ikke_match(self) -> None:
+        r = analyser(
+            [
+                self.stationsvej("2015-01-01", "2026-05-01", postnummer=4000, kommunekode=265),
+                self.stationsvej("2026-05-02", postnummer=8000, kommunekode=751),
+            ]
+        )
+        self.assertEqual(r.status, Status.IKKE_MATCH)
+        self.assertEqual(r.adresseskift_dato, date(2026, 5, 2))
+
+    def test_2_esplanaden_kun_postnummer_aendret_er_ikke_match(self) -> None:
+        r = analyser(
+            [
+                adresse(
+                    "2015-01-01",
+                    "2026-09-11",
+                    vejnavn="Esplanaden",
+                    husnummer=50,
+                    postnummer=1098,
+                    kommunekode=101,
+                    postdistrikt="København K",
+                ),
+                adresse(
+                    "2026-09-12",
+                    vejnavn="Esplanaden",
+                    husnummer=50,
+                    postnummer=1263,
+                    kommunekode=101,
+                    postdistrikt="København K",
+                ),
+            ]
+        )
+        self.assertEqual(r.status, Status.IKKE_MATCH)
+        self.assertIn("kun postnummer ændret", r.note)
+
+    def test_3_kun_kommunekode_aendret_er_ikke_match(self) -> None:
+        r = analyser(
+            [adresse("2015-01-01", "2026-09-11", kommunekode=165), adresse("2026-09-12", kommunekode=161)]
+        )
+        self.assertEqual(r.status, Status.IKKE_MATCH)
+
+    def test_4_postnummer_og_kommunekode_aendret_er_reel_flytning(self) -> None:
+        r = analyser(
+            [
+                adresse("2015-01-01", "2026-09-11", postnummer=2600, kommunekode=161),
+                adresse("2026-09-12", postnummer=4000, kommunekode=265),
+            ]
+        )
+        self.assertEqual(r.status, Status.MATCH)
+        self.assertEqual(r.gammel_adresse, "Industrivej 10, 2600 Glostrup")
+
+    def test_kommune_aendret_men_postnummer_mangler_er_utilstraekkelig(self) -> None:
+        r = analyser(
+            [
+                adresse("2015-01-01", "2026-09-11", postnummer=None, kommunekode=165),
+                adresse("2026-09-12", kommunekode=161),
+            ]
+        )
+        self.assertEqual(r.status, Status.UTILSTRAEKKELIGE_DATA)
+
+    def test_kun_etage_aendret_samtidig_med_postnummer_er_ikke_match(self) -> None:
+        r = analyser(
+            [
+                adresse("2015-01-01", "2026-09-11", etage="st"),
+                adresse("2026-09-12", etage="1", postnummer=2605),
+            ]
+        )
+        self.assertEqual(r.status, Status.IKKE_MATCH)
 
 
 class TestUfuldstaendigAeldreHistorik(unittest.TestCase):

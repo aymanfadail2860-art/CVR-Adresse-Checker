@@ -5,10 +5,11 @@ bogstavFra, husnummerTil, bogstavTil, etage, sidedoer, postnummer,
 postdistrikt, landekode, kommune.kommuneKode og periode.gyldigFra/gyldigTil.
 
 Den fysiske placering bestemmes af land, vej og husnummer (inkl. bogstav og
-husnummerTil). Postnummer, kommunekode og vejkode alene afgør ikke en
-flytning: samme normaliserede vejnavn og husnummer er samme adresse, selv om
-de er ændret (fx ved kommunalreformen 2007 eller omlagte postnumre). Etage,
-sidedør, c/o, postboks, adresseId og tidsstempler indgår slet ikke.
+husnummerTil). Ændres kun ét af postnummer, kommunekode eller vejkode, er det
+samme adresse (fx omlagte postnumre). Ændres både postnummer og kommunekode,
+er det en anden by og dermed en reel flytning, selv med samme vejnavn og
+husnummer (fx Stationsvej 1, 4000 Roskilde -> Stationsvej 1, 8000 Aarhus).
+Etage, sidedør, c/o, postboks, adresseId og tidsstempler indgår slet ikke.
 """
 
 from __future__ import annotations
@@ -171,8 +172,9 @@ def samme_fysiske_adresse(a: Adressepost, b: Adressepost) -> bool | None:
 
     Samme vej, hvis det normaliserede vejnavn er ens, eller hvis vejkoden er
     ens i samme kommune (ren omdøbning). Derefter skal husnummer og bogstav
-    (fra/til) være ens. Postnummer, kommunekode og vejkode alene giver aldrig
-    en flytning. Returnerer None, hvis det ikke kan afgøres.
+    (fra/til) være ens. Postnummer, kommunekode eller vejkode alene giver
+    ikke en flytning, men postnummer OG kommunekode ændret samtidig gør.
+    Returnerer None, hvis det ikke kan afgøres.
     """
     if a.manglende_felter() or b.manglende_felter():
         return None
@@ -196,9 +198,27 @@ def samme_fysiske_adresse(a: Adressepost, b: Adressepost) -> bool | None:
         samme_vej = False
     else:
         return None
-    return samme_vej and (a.husnummer_fra, a.bogstav_fra, a.husnummer_til, a.bogstav_til) == (
+    if not samme_vej or (a.husnummer_fra, a.bogstav_fra, a.husnummer_til, a.bogstav_til) != (
         b.husnummer_fra,
         b.bogstav_fra,
         b.husnummer_til,
         b.bogstav_til,
-    )
+    ):
+        return False
+    return _samme_by(a, b)
+
+
+def _samme_by(a: Adressepost, b: Adressepost) -> bool | None:
+    """Samme by, medmindre både postnummer og kommunekode er ændret.
+
+    Mangler et af felterne, mens det andet er ændret, kan det ikke afgøres.
+    """
+    post_kendt = bool(a.postnummer and b.postnummer)
+    kommune_kendt = bool(a.kommunekode and b.kommunekode)
+    nyt_post = post_kendt and a.postnummer != b.postnummer
+    ny_kommune = kommune_kendt and a.kommunekode != b.kommunekode
+    if nyt_post and ny_kommune:
+        return False
+    if (nyt_post and not kommune_kendt) or (ny_kommune and not post_kendt):
+        return None
+    return True

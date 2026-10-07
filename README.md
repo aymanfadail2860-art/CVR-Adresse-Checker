@@ -76,13 +76,17 @@ Kun `beliggenhedsadresse` bruges. `postadresse` indgår ikke.
      samme kommune (ren omdøbning af vejen). Ved normaliseringen ignoreres
      store/små bogstaver, punktum, bindestreg og mellemrum, og "Aa" tæller
      som "Å".
-   - **Ændrer ikke adressen:** postnummer, kommuneKode og vejkode. Et skifte i
-     dem alene (fx kommunalreformen 2007 eller omlagte postnumre) er ikke en
-     flytning.
+   - **Ændrer ikke adressen:** et skift i ét af felterne postnummer,
+     kommuneKode eller vejkode alene, fx et omlagt postnummer eller
+     kommunalreformen 2007 med samme postnummer.
+   - **Anden by:** skifter **både** postnummer og kommuneKode, er det en reel
+     flytning, også med samme vejnavn og husnummer (fx Stationsvej 1,
+     4000 Roskilde → Stationsvej 1, 8000 Aarhus). Er det ene felt ændret,
+     mens det andet mangler, kan det ikke afgøres.
    - **Indgår slet ikke:** etage, sidedør, c/o, postboks, adresseId,
      sidstOpdateret og DAR-validering.
-   - **Reel flytning kræver:** ny vej, nyt husnummer, nyt husbogstav eller et
-     andet land.
+   - **Reel flytning kræver:** ny vej, nyt husnummer, nyt husbogstav, et
+     andet land, eller nyt postnummer og ny kommune samtidig.
 2. **Sortering:** posterne sorteres efter `periode.gyldigFra`.
 3. **Segmenter:** fra den aktuelle post (`gyldigTil = null`) går værktøjet
    baglæns. Fortløbende poster med samme fysiske adresse er ét segment, så
